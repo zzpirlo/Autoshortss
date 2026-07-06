@@ -1,5 +1,6 @@
-import { createClient } from '@deepgram/sdk';
+import { DeepgramClient } from '@deepgram/sdk';
 import { Readable } from 'node:stream';
+import { PassThrough } from 'node:stream';
 
 /**
  * Service de transcription via Deepgram API
@@ -38,7 +39,7 @@ export async function transcribeAudioStream(
     utterances?: boolean;
   } = {}
 ): Promise<TranscriptResult> {
-  const deepgram = createClient(apiKey);
+  const deepgram = new DeepgramClient(apiKey);
 
   const {
     language = 'fr',
@@ -48,9 +49,17 @@ export async function transcribeAudioStream(
     utterances = true
   } = options;
 
+  // Convertir le stream Readable en buffer pour l'upload
+  // Deepgram SDK attend un buffer ou un stream convertible
+  const chunks: Buffer[] = [];
+  for await (const chunk of audioStream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const audioBuffer = Buffer.concat(chunks);
+
   // Configurer la requête Deepgram
-  const response = await deepgram.listen.prerecorded.transcribeStream(
-    audioStream,
+  const response = await deepgram.listen.prerecorded.transcribeFile(
+    audioBuffer,
     {
       model: 'nova-2',
       language,
@@ -65,7 +74,7 @@ export async function transcribeAudioStream(
     }
   );
 
-  // Parser la réponse
+  // Parser la réponse (format SDK v5+)
   const result = response.result;
   const channels = result?.results?.channels?.[0];
   const alternatives = channels?.alternatives?.[0];
@@ -75,7 +84,7 @@ export async function transcribeAudioStream(
   }
 
   const words = alternatives.words || [];
-  const paragraphs = result?.results?.channels?.[0]?.alternatives?.[0]?.paragraphs?.paragraphs || [];
+  const paragraphs = channels?.alternatives?.[0]?.paragraphs?.paragraphs || [];
 
   // Construire les segments à partir des utterances (si disponibles) ou des paragraphes
   let segments: TranscriptSegment[] = [];
