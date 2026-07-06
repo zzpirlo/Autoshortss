@@ -25,7 +25,7 @@ export async function extractAudioToMp3Stream(videoPath: string): Promise<Readab
   // -ac 1 : mono
   // -f mp3 : format output MP3
   // pipe:1 : sortie sur stdout
-  const ffmpeg = execFileAsync('ffmpeg', [
+  const { stdout } = await execFileAsync('ffmpeg', [
     '-i', videoPath,
     '-vn',
     '-acodec', 'libmp3lame',
@@ -40,7 +40,7 @@ export async function extractAudioToMp3Stream(videoPath: string): Promise<Readab
   });
 
   // Retourner le stdout comme stream lisible
-  return ffmpeg.stdout as unknown as Readable;
+  return stdout as unknown as Readable;
 }
 
 /**

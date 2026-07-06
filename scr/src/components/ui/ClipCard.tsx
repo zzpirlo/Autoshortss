@@ -6,7 +6,7 @@ import { Card } from "./Card";
 import { Badge } from "./Badge";
 import { Button } from "./Button";
 
-interface ClipCardProps {
+export interface ClipCardProps {
   clip: ViralMoment;
   index: number;
   videoDuration?: number;

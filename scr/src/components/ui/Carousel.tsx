@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "./Button";
 import { Card } from "./Card";
 
-interface CarouselProps {
+export interface CarouselProps {
   children: ReactNode;
   className?: string;
   autoPlay?: boolean;

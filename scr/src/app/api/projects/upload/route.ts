@@ -34,16 +34,6 @@ if (!DEEPSEEK_API_KEY) {
   throw new Error('DEEPSEEK_API_KEY manquant dans les variables d\'environnement');
 }
 
-// Configuration des clés API depuis les variables d'environnement
-const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-
-if (!DEEPGRAM_API_KEY) {
-  throw new Error('DEEPGRAM_API_KEY manquant dans les variables d\'environnement');
-}
-if (!DEEPSEEK_API_KEY) {
-  throw new Error('DEEPSEEK_API_KEY manquant dans les variables d\'environnement');
-}
 
 interface UploadResponse {
   success: boolean;
@@ -118,8 +108,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
     tempVideoPath = await saveUploadedVideo(file);
 
     // 3. Obtenir les métadonnées vidéo
-    const { duration: videoDuration, width, height, fps } = await getVideoMetadata(tempVideoPath);
-    const duration = videoDuration || await getVideoDuration(tempVideoPath);
+    const { width, height, fps } = await getVideoMetadata(tempVideoPath);
+    const duration = await getVideoDuration(tempVideoPath);
 
     // 4. Créer le projet en base
     const project = await prisma.project.create({

@@ -6,7 +6,7 @@ import { Card } from "./Card";
 import { Button } from "./Button";
 import { Badge } from "./Badge";
 
-interface DropZoneProps {
+export interface DropZoneProps {
   onFileSelect: (file: File) => void;
   acceptedTypes?: string[];
   maxSizeMB?: number;
@@ -102,17 +102,17 @@ export function DropZone({
     <div
       ref={(el) => {
         if (el) {
-          el.addEventListener("drop", handleDrop);
-          el.addEventListener("dragover", handleDragOver);
-          el.addEventListener("dragenter", handleDragEnter);
-          el.addEventListener("dragleave", handleDragLeave);
+          el.addEventListener("drop", handleDrop as unknown as EventListener);
+          el.addEventListener("dragover", handleDragOver as unknown as EventListener);
+          el.addEventListener("dragenter", handleDragEnter as unknown as EventListener);
+          el.addEventListener("dragleave", handleDragLeave as unknown as EventListener);
         }
         return () => {
           if (el) {
-            el.removeEventListener("drop", handleDrop);
-            el.removeEventListener("dragover", handleDragOver);
-            el.removeEventListener("dragenter", handleDragEnter);
-            el.removeEventListener("dragleave", handleDragLeave);
+            el.removeEventListener("drop", handleDrop as unknown as EventListener);
+            el.removeEventListener("dragover", handleDragOver as unknown as EventListener);
+            el.removeEventListener("dragenter", handleDragEnter as unknown as EventListener);
+            el.removeEventListener("dragleave", handleDragLeave as unknown as EventListener);
           }
         };
       }}

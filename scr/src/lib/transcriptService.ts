@@ -1,6 +1,5 @@
 import { DeepgramClient } from '@deepgram/sdk';
 import { Readable } from 'node:stream';
-import { PassThrough } from 'node:stream';
 
 /**
  * Service de transcription via Deepgram API
@@ -39,7 +38,7 @@ export async function transcribeAudioStream(
     utterances?: boolean;
   } = {}
 ): Promise<TranscriptResult> {
-  const deepgram = new DeepgramClient(apiKey);
+  const deepgram = new DeepgramClient({ apiKey });
 
   const {
     language = 'fr',
@@ -50,68 +49,56 @@ export async function transcribeAudioStream(
   } = options;
 
   // Convertir le stream Readable en buffer pour l'upload
-  // Deepgram SDK attend un buffer ou un stream convertible
   const chunks: Buffer[] = [];
   for await (const chunk of audioStream) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   const audioBuffer = Buffer.concat(chunks);
 
-  // Configurer la requête Deepgram
-  const response = await deepgram.listen.prerecorded.transcribeFile(
-    audioBuffer,
-    {
-      model: 'nova-2',
-      language,
-      diarize,
-      smart_format: smartFormat,
-      punctuate,
-      utterances,
-      // Options pour la détection de locuteurs
-      multichannel: false,
-      // Obtenir les timestamps au niveau mot
-      words: true,
-    }
-  );
+  // Transcrire via le SDK Deepgram v5 (listen.v1.media.transcribeFile)
+  const response = await deepgram.listen.v1.media.transcribeFile(audioBuffer, {
+    model: 'nova-2',
+    language,
+    diarize,
+    smart_format: smartFormat,
+    punctuate,
+    utterances,
+    // Options pour la détection de locuteurs
+    multichannel: false,
+  });
 
-  // Parser la réponse (format SDK v5+)
-  const result = response.result;
-  const channels = result?.results?.channels?.[0];
+  // La réponse est une union ; on attend la réponse synchrone standard
+  if (!('results' in response)) {
+    throw new Error('Réponse Deepgram inattendue (traitement asynchrone non supporté)');
+  }
+
+  const dgResults = response.results;
+  const channels = dgResults.channels?.[0];
   const alternatives = channels?.alternatives?.[0];
 
   if (!alternatives) {
     throw new Error('Aucun résultat de transcription');
   }
 
-  const words = alternatives.words || [];
-  const paragraphs = channels?.alternatives?.[0]?.paragraphs?.paragraphs || [];
+  const words = (alternatives.words ?? []) as any[];
+  const utterancesResult = dgResults.utterances ?? [];
 
-  // Construire les segments à partir des utterances (si disponibles) ou des paragraphes
+  // Construire les segments à partir des utterances (si dispo) ou des mots
   let segments: TranscriptSegment[] = [];
 
-  if (utterances && result?.results?.utterances) {
-    segments = result.results.utterances.map((u: any) => ({
-      start: u.start,
-      end: u.end,
-      text: u.transcript,
-      confidence: u.confidence || 0,
+  if (utterancesResult.length > 0) {
+    segments = utterancesResult.map((u) => ({
+      start: u.start ?? 0,
+      end: u.end ?? 0,
+      text: u.transcript ?? '',
+      confidence: u.confidence ?? 0,
       speaker: u.speaker,
     }));
-  } else if (paragraphs.length > 0) {
-    segments = paragraphs.map((p: any) => ({
-      start: p.start,
-      end: p.end,
-      text: p.text,
-      confidence: p.confidence || 0,
-      speaker: p.speaker,
-    }));
   } else {
-    // Fallback: grouper les mots en phrases
     segments = groupWordsIntoSentences(words);
   }
 
   const fullText = alternatives.transcript || '';
-  const confidence = alternatives.confidence || 0;
 
   return {
     fullText,
