@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFile, unlink, mkdir, rename } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,7 +66,9 @@ function sanitizeFileName(raw: string): string {
 }
 
 /**
- * Sauvegarde la vidéo uploadée dans un fichier temporaire
+ * Sauvegarde la vidéo uploadée dans un fichier temporaire.
+ * Écrit le fichier par streaming (mémoire constante) pour autoriser les gros
+ * fichiers vidéo sans les bufferiser intégralement en RAM.
  */
 async function saveUploadedVideo(file: File): Promise<string> {
   const tempDir = join(tmpdir(), 'autoshorts-uploads');
@@ -74,8 +79,9 @@ async function saveUploadedVideo(file: File): Promise<string> {
   const fileName = `${uuidv4()}-${base}${ext}`;
   const filePath = join(tempDir, fileName);
 
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(filePath, buffer);
+  // Streaming direct du corps de la requête vers le disque
+  const ws = createWriteStream(filePath);
+  await pipeline(Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]), ws);
 
   return filePath;
 }
@@ -125,6 +131,9 @@ async function cleanupTempFile(filePath: string): Promise<void> {
  * Avec tolérance aux pannes : si DeepSeek échoue, on garde quand même la transcription
  */
 export async function POST(request: NextRequest): Promise<NextResponse<UploadResponse>> {
+  // DEBUG : permet de voir la requête arriver dans le terminal du serveur
+  console.log('--> API Upload appelée');
+
   const errors: string[] = [];
   let tempVideoPath: string | null = null;
 
@@ -141,6 +150,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
         { status: 400 }
       );
     }
+
+    // Sécurité absolue : s'assurer que le dossier de stockage persistant existe
+    await mkdir(join(projectRoot, 'data', 'uploads'), { recursive: true });
 
     // Valider le type de fichier
     const allowedTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska'];
@@ -212,6 +224,22 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
       });
 
       transcriptId = transcript.id;
+
+      // Persister les mots minutés (Deepgram) pour la génération de sous-titres
+      // dynamiques à l'export. Tolérance aux pannes : ne fait pas échouer l'upload.
+      if (transcriptResult.words.length) {
+        try {
+          const transcriptsDir = join(projectRoot, 'data', 'transcripts');
+          await mkdir(transcriptsDir, { recursive: true });
+          await writeFile(
+            join(transcriptsDir, `${project.id}.json`),
+            JSON.stringify(transcriptResult.words),
+            'utf8',
+          );
+        } catch (wordsErr) {
+          console.error('[Upload] Échec sauvegarde mots sous-titres:', wordsErr);
+        }
+      }
 
     } catch (transcriptionError) {
       const errorMsg = `Erreur transcription Deepgram: ${transcriptionError instanceof Error ? transcriptionError.message : 'Erreur inconnue'}`;

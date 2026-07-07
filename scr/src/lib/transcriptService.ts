@@ -14,9 +14,23 @@ export interface TranscriptSegment {
   speaker?: number;
 }
 
+/**
+ * Mot individuel avec son timestamp précis (secondes) reçu de Deepgram.
+ * Conservé pour la génération de sous-titres dynamiques (style CapCut).
+ */
+export interface TranscriptWord {
+  start: number;
+  end: number;
+  text: string;
+  confidence: number;
+  speaker?: number;
+}
+
 export interface TranscriptResult {
   fullText: string;
   segments: TranscriptSegment[];
+  /** Mots individuels minutés (Deepgram) — base des sous-titres dynamiques */
+  words: TranscriptWord[];
   language: string;
   duration: number;
 }
@@ -96,8 +110,17 @@ export async function transcribeAudioStream(
     throw new Error('Aucun résultat de transcription');
   }
 
-  const words = (alternatives.words ?? []) as any[];
+  const words = (alternatives.words ?? []) as unknown as DeepgramWord[];
   const utterancesResult = dgResults.utterances ?? [];
+
+  // Conserver le tableau de mots individuels avec leurs timestamps précis
+  const wordList: TranscriptWord[] = words.map((w) => ({
+    start: typeof w.start === 'number' ? w.start : 0,
+    end: typeof w.end === 'number' ? w.end : 0,
+    text: w.punctuated_word || w.word || '',
+    confidence: typeof w.confidence === 'number' ? w.confidence : 0,
+    speaker: typeof w.speaker === 'number' ? w.speaker : undefined,
+  }));
 
   // Construire les segments à partir des utterances (si dispo) ou des mots
   let segments: TranscriptSegment[] = [];
@@ -119,15 +142,28 @@ export async function transcribeAudioStream(
   return {
     fullText,
     segments,
+    words: wordList,
     language,
     duration: segments.length > 0 ? segments[segments.length - 1].end : 0,
   };
 }
 
 /**
+ * Forme brute d'un mot tel que renvoyé par Deepgram
+ */
+interface DeepgramWord {
+  start?: number;
+  end?: number;
+  word?: string;
+  punctuated_word?: string;
+  confidence?: number;
+  speaker?: number;
+}
+
+/**
  * Groupe les mots en phrases basées sur la ponctuation
  */
-function groupWordsIntoSentences(words: any[]): TranscriptSegment[] {
+function groupWordsIntoSentences(words: DeepgramWord[]): TranscriptSegment[] {
   if (!words.length) return [];
 
   const segments: TranscriptSegment[] = [];
@@ -136,31 +172,31 @@ function groupWordsIntoSentences(words: any[]): TranscriptSegment[] {
   for (const word of words) {
     if (!currentSegment) {
       currentSegment = {
-        start: word.start,
-        end: word.end,
-        text: word.punctuated_word || word.word,
-        confidence: word.confidence || 0,
+        start: word.start ?? 0,
+        end: word.end ?? 0,
+        text: word.punctuated_word || word.word || '',
+        confidence: word.confidence ?? 0,
         speaker: word.speaker,
       };
     } else {
-      currentSegment.end = word.end;
-      currentSegment.text += ' ' + (word.punctuated_word || word.word);
-      currentSegment.confidence = Math.min(currentSegment.confidence, word.confidence || 0);
+      currentSegment.end = word.end ?? 0;
+      currentSegment.text += ' ' + (word.punctuated_word || word.word || '');
+      currentSegment.confidence = Math.min(currentSegment.confidence, word.confidence ?? 0);
       if (word.speaker !== undefined && currentSegment.speaker !== word.speaker) {
         // Changement de locuteur -> nouveau segment
         segments.push(currentSegment);
         currentSegment = {
-          start: word.start,
-          end: word.end,
-          text: word.punctuated_word || word.word,
-          confidence: word.confidence || 0,
+          start: word.start ?? 0,
+          end: word.end ?? 0,
+          text: word.punctuated_word || word.word || '',
+          confidence: word.confidence ?? 0,
           speaker: word.speaker,
         };
       }
     }
 
     // Fin de phrase détectée
-    const text = word.punctuated_word || word.word;
+    const text = word.punctuated_word || word.word || '';
     if (/[.!?]/.test(text.slice(-1))) {
       if (currentSegment) {
         segments.push(currentSegment);

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
 import { exportVerticalShort } from '@/lib/videoProcessor';
+import type { TimedWord } from '@/lib/subtitleGenerator';
 import { PrismaClient } from '@/generated/prisma/client';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 
@@ -85,8 +86,18 @@ export async function POST(request: NextRequest): Promise<NextResponse<ExportRes
   const fileName = `${projectId}-${randomUUID()}.mp4`;
   const outputPath = path.join(exportsDir, fileName);
 
+  // Récupérer les mots minutés pour graver des sous-titres dynamiques (optionnel)
+  let words: TimedWord[] | undefined;
   try {
-    await exportVerticalShort(videoPath, start, end, outputPath);
+    const transcriptsDir = path.join(projectRoot, 'data', 'transcripts');
+    const raw = await readFile(path.join(transcriptsDir, `${projectId}.json`), 'utf8');
+    words = JSON.parse(raw) as TimedWord[];
+  } catch {
+    // Pas de mots disponibles -> export sans sous-titres
+  }
+
+  try {
+    await exportVerticalShort(videoPath, start, end, outputPath, words);
   } catch (exportError) {
     console.error('[Export] Échec FFmpeg:', exportError);
     return NextResponse.json(

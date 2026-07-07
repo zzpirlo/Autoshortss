@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
+import { generateAssSubtitles, type TimedWord } from '@/lib/subtitleGenerator';
 
 const execFileAsync = promisify(execFile);
 
@@ -160,32 +161,61 @@ export function streamVideoSegment(videoPath: string, start: number, end: number
  * @param start - Début en secondes
  * @param end - Fin en secondes
  * @param outputPath - Chemin du fichier vertical final (ex: public/exports/xxx.mp4)
+ * @param words - Mots minutés (Deepgram) pour graver des sous-titres dynamiques
  * @returns Le chemin du fichier généré
  */
 export async function exportVerticalShort(
   videoPath: string,
   start: number,
   end: number,
-  outputPath: string
+  outputPath: string,
+  words?: TimedWord[]
 ): Promise<string> {
   if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
     throw new Error(`Intervalle de segment invalide : start=${start}, end=${end} (attendu start >= 0 et end > start)`);
   }
 
-  const { access, mkdir, stat, unlink } = await import('node:fs/promises');
+  const { access, mkdir, stat, unlink, writeFile } = await import('node:fs/promises');
 
   // Tolérance aux pannes : vérifier la source AVANT de lancer FFmpeg
   await access(videoPath);
   await mkdir(join(outputPath, '..'), { recursive: true });
 
-  const duration = end - start;
+  // Découpage précis à la ms près : on se base sur le 1er et le dernier mot
+  // tombant dans la fenêtre [start, end] plutôt que sur les bornes approximatives.
+  let clipStart = start;
+  let clipEnd = end;
+  let assPath: string | undefined;
+
+  const wordsInRange = words?.filter((w) => w.end > start && w.start < end) ?? [];
+
+  if (wordsInRange.length > 0) {
+    clipStart = Math.max(start, wordsInRange[0].start);
+    clipEnd = Math.min(end, wordsInRange[wordsInRange.length - 1].end);
+
+    // Générer le fichier .ass des sous-titres et le graver via le filtre FFmpeg
+    const assContent = generateAssSubtitles(wordsInRange, { karaoke: true });
+    assPath = join(tmpdir(), `${randomUUID()}.ass`);
+    await writeFile(assPath, assContent, 'utf8');
+  }
+
+  // Repli si le cut dérivé des mots est trop court
+  if (clipEnd - clipStart < 0.05) {
+    clipStart = start;
+    clipEnd = end;
+  }
+
+  const duration = clipEnd - clipStart;
 
   // Recadrage vertical centré : bande de largeur ih*9/16 au centre
   const cropFilter = 'crop=ih*9/16:ih';
-  const vf = `${cropFilter},scale=1080:1920,setsar=1`;
+  let vf = `${cropFilter},scale=1080:1920,setsar=1`;
+  if (assPath) {
+    vf += `,subtitles=${escapeSubtitlesPath(assPath)}`;
+  }
 
   const ffmpeg = spawn('ffmpeg', [
-    '-ss', String(start),
+    '-ss', String(clipStart),
     '-i', videoPath,
     '-t', String(duration),
     '-vf', vf,
@@ -207,6 +237,11 @@ export async function exportVerticalShort(
     ffmpeg.on('error', reject);
   });
 
+  // Nettoyer le fichier .ass temporaire dans tous les cas
+  if (assPath) {
+    await unlink(assPath).catch(() => {});
+  }
+
   if (exitCode !== 0) {
     const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
     await unlink(outputPath).catch(() => {});
@@ -226,6 +261,18 @@ export async function exportVerticalShort(
   }
 
   return outputPath;
+}
+
+/**
+ * Échappe un chemin de fichier pour le filtre FFmpeg `subtitles=...`
+ * (le parseur de filtergraph utilise `:` comme séparateur d'options).
+ */
+function escapeSubtitlesPath(p: string): string {
+  return p
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+    .replace(/ /g, '\\ ');
 }
 
 /**
