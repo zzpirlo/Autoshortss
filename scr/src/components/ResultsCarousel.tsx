@@ -8,9 +8,18 @@ import { ViralMoment } from "@/lib/types";
 export interface ResultsCarouselProps {
   clips: ViralMoment[];
   videoDuration?: number;
+  projectId?: string;
+  onPreview?: (clip: ViralMoment) => void;
+  onExport?: (clip: ViralMoment) => Promise<{ url: string }>;
 }
 
-export function ResultsCarousel({ clips, videoDuration }: ResultsCarouselProps) {
+export function ResultsCarousel({
+  clips,
+  videoDuration,
+  projectId,
+  onPreview,
+  onExport,
+}: ResultsCarouselProps) {
   if (!clips.length) return null;
 
   return (
@@ -27,7 +36,14 @@ export function ResultsCarousel({ clips, videoDuration }: ResultsCarouselProps) 
       <Carousel autoPlay loop showArrows showDots autoPlayInterval={6000}>
         {clips.map((clip, index) => (
           <div key={clip.rank ?? index} className="mx-auto max-w-2xl px-2">
-            <ClipCard clip={clip} index={index} videoDuration={videoDuration} />
+            <ClipCard
+              clip={clip}
+              index={index}
+              videoDuration={videoDuration}
+              projectId={projectId}
+              onPreview={onPreview}
+              onExport={onExport}
+            />
           </div>
         ))}
       </Carousel>

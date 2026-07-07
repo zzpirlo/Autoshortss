@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DropZone } from "@/components/ui/DropZone";
 import { VerticalStepper } from "@/components/ui/Stepper";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 import { StagePanel, type StepStatus, type PipelinePhase } from "@/components/StagePanel";
 import { ResultsCarousel } from "@/components/ResultsCarousel";
 import { ViralMoment } from "@/lib/types";
@@ -88,8 +89,12 @@ export function PipelinePage() {
   const [statuses, setStatuses] = useState<StepStatus[]>(allPending);
   const [logs, setLogs] = useState<string[]>([]);
   const [clips, setClips] = useState<ViralMoment[]>([]);
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [videoDuration, setVideoDuration] = useState<number | undefined>(undefined);
   const [errorMsg, setErrorMsg] = useState<string | undefined>(undefined);
+
+  // État de la modale de prévisualisation vidéo
+  const [preview, setPreview] = useState<{ src: string; title: string } | null>(null);
 
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const clearTimers = useCallback(() => {
@@ -108,9 +113,45 @@ export function PipelinePage() {
     setStatuses(allPending());
     setLogs([]);
     setClips([]);
+    setProjectId(undefined);
     setVideoDuration(undefined);
     setErrorMsg(undefined);
+    setPreview(null);
   }, [clearTimers]);
+
+  // Prévisualisation : ouvre la modale avec le flux vidéo segmenté
+  const handlePreview = useCallback(
+    (clip: ViralMoment) => {
+      if (!projectId) return;
+      const src = `/api/video/preview?projectId=${encodeURIComponent(
+        projectId,
+      )}&start=${clip.startTime}&end=${clip.endTime}`;
+      setPreview({ src, title: clip.title });
+    },
+    [projectId],
+  );
+
+  // Export : POST vers l'API, renvoie l'URL du short 9:16 généré
+  const handleExport = useCallback(
+    async (clip: ViralMoment): Promise<{ url: string }> => {
+      if (!projectId) throw new Error("Projet introuvable");
+      const res = await fetch("/api/video/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          start: clip.startTime,
+          end: clip.endTime,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || "Échec de l'export");
+      }
+      return { url: data.url as string };
+    },
+    [projectId],
+  );
 
   const handleFileSelect = useCallback(
     async (file: File) => {
@@ -151,22 +192,47 @@ export function PipelinePage() {
         const data = await res.json().catch(() => ({}));
         clearTimers();
 
-        if (!res.ok || !data.success) {
+        // DEBUG : structure exacte renvoyée par le backend
+        console.log("Données reçues :", data);
+
+        // Normaliser les clips : l'API renvoie startTime/endTime, mais on tolère
+        // aussi start/end (au cas où le modèle IA utiliserait ces clés).
+        const rawMoments = (data.viralMoments ?? data.clips ?? []) as Array<Record<string, unknown>>;
+        const moments: ViralMoment[] = rawMoments.map((m) => {
+          const start = (m.startTime ?? m.start ?? 0) as number;
+          const end = (m.endTime ?? m.end ?? start) as number;
+          return {
+            rank: (m.rank as number) ?? 0,
+            title: (m.title as string) ?? "Moment viral",
+            viralScore: (m.viralScore as number) ?? 0,
+            hook: (m.hook as string) ?? "",
+            startTime: start,
+            endTime: end,
+            reasoning: (m.reasoning as string) ?? "",
+          };
+        });
+
+        // Succès si la requête est OK ET (flag success OU présence de clips).
+        // Ainsi, même si le backend renvoie un statut non-200 mais avec des
+        // moments, l'interface bascule quand même sur "done" (Succès).
+        const isSuccess = res.ok && (data.success === true || moments.length > 0);
+
+        if (!isSuccess) {
           throw new Error(
-            data?.message || data?.errors?.join(" ; ") || "Échec du traitement serveur",
+            data?.message || (data?.errors && data.errors.join(" ; ")) || "Échec du traitement serveur",
           );
         }
 
-        const moments: ViralMoment[] = data.viralMoments ?? [];
         setStatuses(PIPELINE_STEPS.map(() => "completed"));
         setLogs((prev) => [
           ...prev,
           `✓ Pipeline terminé${moments.length ? ` — ${moments.length} moment(s) détecté(s)` : ""}`,
         ]);
         setClips(moments);
+        setProjectId(data.projectId as string | undefined);
         setPhase("done");
 
-        if (!moments.length) {
+        if (moments.length === 0) {
           setErrorMsg(
             "Transcription réussie, mais aucun moment viral n'a été détecté par l'IA.",
           );
@@ -177,6 +243,7 @@ export function PipelinePage() {
         setErrorMsg(msg);
         setStatuses((prev) => {
           const next = [...prev];
+          // Marque en erreur la dernière étape active (ou la dernière étape)
           const idx = next.findIndex((s) => s === "active");
           next[idx === -1 ? next.length - 1 : idx] = "error";
           return next;
@@ -250,7 +317,13 @@ export function PipelinePage() {
       </div>
 
       {/* Results */}
-      <ResultsCarousel clips={clips} videoDuration={videoDuration} />
+      <ResultsCarousel
+        clips={clips}
+        videoDuration={videoDuration}
+        projectId={projectId}
+        onPreview={handlePreview}
+        onExport={handleExport}
+      />
 
       {/* Reset after success */}
       {phase === "done" && (
@@ -260,6 +333,21 @@ export function PipelinePage() {
           </Button>
         </div>
       )}
+
+      {/* Modale de prévisualisation vidéo */}
+      <Modal isOpen={preview !== null} onClose={() => setPreview(null)} title={preview?.title}>
+        {preview && (
+          <video
+            key={preview.src}
+            src={preview.src}
+            controls
+            autoPlay
+            className="w-full rounded-xl bg-black"
+          >
+            Votre navigateur ne supporte pas la lecture de vidéos.
+          </video>
+        )}
+      </Modal>
     </main>
   );
 }

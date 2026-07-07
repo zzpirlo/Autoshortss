@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ViralMoment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Card } from "./Card";
@@ -10,6 +11,13 @@ export interface ClipCardProps {
   clip: ViralMoment;
   index: number;
   videoDuration?: number;
+  /** Identifiant du projet (nécessaire pour appeler les API preview/export) */
+  projectId?: string;
+  /** Ouvre la prévisualisation du clip */
+  onPreview?: (clip: ViralMoment) => void;
+  /** Déclenche l'export 9:16 et résout avec l'URL du fichier généré */
+  onExport?: (clip: ViralMoment) => Promise<{ url: string }>;
+  /** Alias historique (clic sur la carte) — tombé back sur onPreview si fourni */
   onSelect?: (clip: ViralMoment) => void;
   className?: string;
 }
@@ -48,6 +56,9 @@ export function ClipCard({
   clip,
   index,
   videoDuration,
+  projectId,
+  onPreview,
+  onExport,
   onSelect,
   className = "",
 }: ClipCardProps) {
@@ -57,6 +68,41 @@ export function ClipCard({
   const timelineStart = formatTime(clip.startTime);
   const timelineEnd = formatTime(clip.endTime);
   const clipDuration = formatDuration(clip.startTime, clip.endTime);
+
+  // État d'export (encodage 9:16 en cours / résultat / erreur)
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportUrl, setExportUrl] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const handlePreview = () => {
+    if (onPreview) onPreview(clip);
+    else onSelect?.(clip);
+  };
+
+  const triggerDownload = (url: string) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `short-${clip.rank}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const handleExport = async () => {
+    if (!onExport || isExporting) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const { url } = await onExport(clip);
+      setExportUrl(url);
+      // Téléchargement automatique du short généré
+      triggerDownload(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "Échec de l'export");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <Card
@@ -68,13 +114,13 @@ export function ClipCard({
         isSelected && "ring-2 ring-cyan-500",
         className
       )}
-      onClick={() => onSelect?.(clip)}
+      onClick={() => handlePreview()}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect?.(clip);
+          handlePreview();
         }
       }}
       aria-label={`Clip viral #${clip.rank}: ${clip.title}`}
@@ -115,7 +161,7 @@ export function ClipCard({
               <span className="font-medium text-zinc-300">Hook détecté</span>
             </div>
             <p className="text-zinc-200 text-sm italic leading-relaxed">
-              "{clip.hook}"
+              &laquo;{clip.hook}&raquo;
             </p>
           </div>
         </div>
@@ -175,6 +221,7 @@ export function ClipCard({
             variant="primary"
             size="sm"
             fullWidth
+            disabled={!projectId}
             leftIcon={
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -183,24 +230,51 @@ export function ClipCard({
             }
             onClick={(e) => {
               e.stopPropagation();
-              onSelect?.(clip);
+              handlePreview();
             }}
           >
             Prévisualiser
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            leftIcon={
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-            }
-            onClick={(e) => e.stopPropagation()}
-          >
-            Exporter
-          </Button>
+
+          {exportUrl ? (
+            <Button
+              variant="neon"
+              size="sm"
+              fullWidth
+              leftIcon={
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                triggerDownload(exportUrl);
+              }}
+            >
+              Télécharger le Short
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              fullWidth
+              isLoading={isExporting}
+              disabled={!projectId}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleExport();
+              }}
+            >
+              {isExporting ? "Encodage 9:16 en cours…" : "Exporter"}
+            </Button>
+          )}
         </div>
+
+        {exportError && (
+          <p className="mt-2 text-xs text-red-400" role="alert">
+            {exportError}
+          </p>
+        )}
       </div>
 
       {/* Score visualization bar - bottom accent */}

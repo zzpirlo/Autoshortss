@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { writeFile, unlink, mkdir } from 'node:fs/promises';
+import { writeFile, unlink, mkdir, rename } from 'node:fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { extractAudioToMp3Stream, getVideoDuration, getVideoMetadata } from '@/lib/videoProcessor';
+import { extractAudioToMp3, getVideoDuration, getVideoMetadata } from '@/lib/videoProcessor';
 import { transcribeAudioStream, TranscriptSegment } from '@/lib/transcriptService';
 import { analyzeViralMoments } from '@/lib/aiAnalyzer';
 import { ViralMoment } from '@/lib/types';
@@ -16,9 +16,10 @@ import Database from 'better-sqlite3';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.join(__dirname, '../../../../..');
 
 // Create the database connection using better-sqlite3
-const dbPath = path.join(__dirname, '../../../../../dev.db');
+const dbPath = path.join(projectRoot, 'dev.db');
 const sqlite = new Database(dbPath);
 const adapter = new PrismaBetterSqlite3({ url: dbPath });
 const prisma = new PrismaClient({ adapter });
@@ -46,19 +47,65 @@ interface UploadResponse {
 }
 
 /**
+ * Nettoie un nom de fichier pour éviter tout caractère problématique dans les
+ * commandes FFmpeg (traits verticaux '｜', apostrophes, accents, espaces, etc.).
+ *  - Supprime les accents (normalisation NFD + suppression des diacritiques)
+ *  - Remplace tout caractère non alphanumérique par un tiret simple `-`
+ *  - Met en minuscules, réduit les tirets consécutifs et nettoie les bords
+ */
+function sanitizeFileName(raw: string): string {
+  const withoutAccents = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return withoutAccents
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
  * Sauvegarde la vidéo uploadée dans un fichier temporaire
  */
 async function saveUploadedVideo(file: File): Promise<string> {
   const tempDir = join(tmpdir(), 'autoshorts-uploads');
   await mkdir(tempDir, { recursive: true });
 
-  const fileName = `${uuidv4()}-${file.name}`;
+  const ext = path.extname(file.name).toLowerCase() || '.mp4';
+  const base = sanitizeFileName(path.parse(file.name).name) || 'video';
+  const fileName = `${uuidv4()}-${base}${ext}`;
   const filePath = join(tempDir, fileName);
 
   const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(filePath, buffer);
 
   return filePath;
+}
+
+/**
+ * Déplace la vidéo temporaire vers un emplacement persistant
+ * `data/uploads/<projectId>-<nomSécurisé><ext>` afin qu'elle reste disponible
+ * pour la prévisualisation et l'export. Le nom est sanitizé pour ne jamais
+ * transmettre de caractères spéciaux à FFmpeg.
+ */
+async function persistUploadedVideo(
+  tempPath: string,
+  projectId: string,
+  baseName: string,
+  ext: string,
+): Promise<string> {
+  const destDir = join(projectRoot, 'data', 'uploads');
+  await mkdir(destDir, { recursive: true });
+  const safeBase = sanitizeFileName(baseName) || 'video';
+  const destPath = join(destDir, `${projectId}-${safeBase}${ext}`);
+
+  try {
+    await rename(tempPath, destPath);
+  } catch {
+    // Fallback si le renommage est inter-disques (copie + suppression)
+    const { copyFile, unlink: rm } = await import('node:fs/promises');
+    await copyFile(tempPath, destPath);
+    await rm(tempPath).catch(() => {});
+  }
+  return destPath;
 }
 
 /**
@@ -119,11 +166,18 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
       },
     });
 
+    // 4b. Persister la vidéo source de façon permanente (pour preview/export)
+    const ext = path.extname(file.name).toLowerCase() || '.mp4';
+    const baseName = sanitizeFileName(path.parse(file.name).name);
+    const persistedPath = await persistUploadedVideo(tempVideoPath!, project.id, baseName, ext);
+    tempVideoPath = null; // le fichier a été déplacé ; ne plus le supprimer
+    const sourcePath = persistedPath; // chemin valide pour le traitement (audio/export)
+
     // 5. Créer l'entrée VideoClip
     const videoClip = await prisma.videoClip.create({
       data: {
         projectId: project.id,
-        filePath: tempVideoPath, // On garde le chemin pour référence (le fichier sera nettoyé après)
+        filePath: persistedPath, // chemin persistant vers la vidéo source
         duration,
         width,
         height,
@@ -139,8 +193,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
     let transcriptResult: Awaited<ReturnType<typeof transcribeAudioStream>> | null = null;
 
     try {
-      const audioStream = await extractAudioToMp3Stream(tempVideoPath);
-      transcriptResult = await transcribeAudioStream(audioStream, DEEPGRAM_API_KEY!, {
+      const audioBuffer = await extractAudioToMp3(sourcePath);
+      transcriptResult = await transcribeAudioStream(audioBuffer, DEEPGRAM_API_KEY!, {
         language: 'fr',
         diarize: true,
         smartFormat: true,
@@ -201,9 +255,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
       }
     }
 
-    // 9. Nettoyer le fichier temporaire (optionnel : on pourrait le déplacer vers un stockage permanent)
-    await cleanupTempFile(tempVideoPath);
-    tempVideoPath = null;
+    // 9. Nettoyer le fichier temporaire (la source est désormais persistée, donc rien à supprimer ici)
+    if (tempVideoPath) {
+      await cleanupTempFile(tempVideoPath);
+      tempVideoPath = null;
+    }
 
     // 10. Réponse
     const hasErrors = errors.length > 0;

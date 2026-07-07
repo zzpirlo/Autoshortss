@@ -58,12 +58,18 @@ export function StagePanel({ steps, statuses, logs, phase }: StagePanelProps) {
       ) : (
         <div className="mb-6">
           <h3 className="text-lg font-semibold text-white">
-            {phase === "idle" ? "En attente d'une vidéo" : "Pipeline figé"}
+            {phase === "idle"
+              ? "En attente d'une vidéo"
+              : phase === "error"
+                ? "Pipeline figé"
+                : "Pipeline terminé"}
           </h3>
           <p className="text-sm text-zinc-400 mt-0.5">
             {phase === "idle"
               ? "Déposez un fichier vidéo pour lancer le traitement IA."
-              : "Une erreur est survenue pendant le traitement."}
+              : phase === "error"
+                ? "Une erreur est survenue pendant le traitement."
+                : "Tous les clips viraux ont été générés avec succès."}
           </p>
         </div>
       )}

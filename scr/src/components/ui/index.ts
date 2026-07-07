@@ -18,3 +18,6 @@ export type { CarouselProps } from "./Carousel";
 
 export { ClipCard, ClipsGrid } from "./ClipCard";
 export type { ClipCardProps, ClipsGridProps } from "./ClipCard";
+
+export { Modal } from "./Modal";
+export type { ModalProps } from "./Modal";

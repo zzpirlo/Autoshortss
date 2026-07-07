@@ -23,12 +23,12 @@ export interface TranscriptResult {
 
 /**
  * Transcrit un flux audio MP3 via Deepgram
- * @param audioStream - Stream audio MP3 (16kHz mono)
+ * @param audioStream - Stream audio MP3 (16kHz mono) OU un Buffer MP3 complet
  * @param apiKey - Clé API Deepgram
  * @param options - Options de transcription
  */
 export async function transcribeAudioStream(
-  audioStream: Readable,
+  audioStream: Readable | Buffer,
   apiKey: string,
   options: {
     language?: string;
@@ -48,24 +48,40 @@ export async function transcribeAudioStream(
     utterances = true
   } = options;
 
-  // Convertir le stream Readable en buffer pour l'upload
-  const chunks: Buffer[] = [];
-  for await (const chunk of audioStream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  // Convertir l'entrée en buffer complet pour l'upload
+  let audioBuffer: Buffer;
+  if (Buffer.isBuffer(audioStream)) {
+    audioBuffer = audioStream;
+  } else {
+    const chunks: Buffer[] = [];
+    for await (const chunk of audioStream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    audioBuffer = Buffer.concat(chunks);
   }
-  const audioBuffer = Buffer.concat(chunks);
 
-  // Transcrire via le SDK Deepgram v5 (listen.v1.media.transcribeFile)
-  const response = await deepgram.listen.v1.media.transcribeFile(audioBuffer, {
-    model: 'nova-2',
-    language,
-    diarize,
-    smart_format: smartFormat,
-    punctuate,
-    utterances,
-    // Options pour la détection de locuteurs
-    multichannel: false,
-  });
+  if (audioBuffer.length === 0) {
+    throw new Error('Le buffer audio est vide — impossible de transcrire');
+  }
+
+  // Transcrire via le SDK Deepgram v5 (listen.v1.media.transcribeFile).
+  // IMPORTANT : on encapsule le buffer dans un objet WithMetadata avec un
+  // `contentType` explicite ('audio/mpeg'). Un Buffer nu est envoyé avec un
+  // Content-Type 'application/octet-stream', ce qui fait renvoyer à Deepgram
+  // une erreur 400 "failed to process audio: corrupt or unsupported data".
+  const response = await deepgram.listen.v1.media.transcribeFile(
+    { data: audioBuffer, contentType: 'audio/mpeg' },
+    {
+      model: 'nova-2',
+      language,
+      diarize,
+      smart_format: smartFormat,
+      punctuate,
+      utterances,
+      // Options pour la détection de locuteurs
+      multichannel: false,
+    }
+  );
 
   // La réponse est une union ; on attend la réponse synchrone standard
   if (!('results' in response)) {
