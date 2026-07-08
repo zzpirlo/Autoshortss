@@ -18,7 +18,7 @@ export interface DropZoneProps {
 export function DropZone({
   onFileSelect,
   acceptedTypes = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/x-matroska"],
-  maxSizeMB = 500,
+  maxSizeMB = 4096,
   disabled = false,
   className = "",
   children,

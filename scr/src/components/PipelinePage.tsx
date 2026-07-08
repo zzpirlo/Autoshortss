@@ -51,34 +51,54 @@ const PIPELINE_STEPS = [
   { label: "Analyse IA", description: "DeepSeek — scores viraux", icon: <SparkIcon /> },
 ] as const;
 
-const STEP_LOGS = [
-  "Initialisation de l'upload…",
-  "Extraction audio → flux MP3",
-  "Transcription Deepgram (fr, diarize)",
-  "Scoring viral DeepSeek",
-];
-
-const STEP_DELAY = 1100; // ms between optimistic step advances
 const allPending = (): StepStatus[] => PIPELINE_STEPS.map(() => "pending");
 
 /* ----------------------------------------------------------------
- * Helpers
+ * Helpers : mapping statut DB -> stepper + normalisation des moments
  * ---------------------------------------------------------------- */
-function readVideoDuration(file: File): Promise<number | null> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.onloadedmetadata = () => {
-      URL.revokeObjectURL(url);
-      resolve(Number.isFinite(video.duration) ? video.duration : null);
-    };
-    video.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(null);
-    };
-    video.src = url;
-  });
+
+// Traduit le statut/stage du projet (DB) en statut visuel des 4 étapes.
+// L'étape 0 (upload) est déjà terminée dès la réponse 200 PENDING.
+function mapStatusToStepper(status: string, stage?: string | null): StepStatus[] {
+  const s: StepStatus[] = ["completed", "pending", "pending", "pending"];
+  if (status === "PENDING") return s;
+  if (status === "PROCESSING") {
+    if (stage === "AUDIO") s[1] = "active";
+    else if (stage === "TRANSCRIPT") { s[1] = "completed"; s[2] = "active"; }
+    else if (stage === "ANALYSIS") { s[1] = "completed"; s[2] = "completed"; s[3] = "active"; }
+    else s[1] = "active";
+    return s;
+  }
+  if (status === "COMPLETED") return ["completed", "completed", "completed", "completed"];
+  if (status === "FAILED") {
+    if (stage === "AUDIO") s[1] = "error";
+    else if (stage === "TRANSCRIPT") { s[1] = "completed"; s[2] = "error"; }
+    else if (stage === "ANALYSIS") { s[1] = "completed"; s[2] = "completed"; s[3] = "error"; }
+    else s[3] = "error";
+    return s;
+  }
+  return s;
+}
+
+function stageLog(stage?: string | null): string {
+  switch (stage) {
+    case "AUDIO": return "Extraction audio → flux MP3";
+    case "TRANSCRIPT": return "Transcription Deepgram (fr, diarize)";
+    case "ANALYSIS": return "Scoring viral DeepSeek";
+    default: return "Traitement en cours…";
+  }
+}
+
+function normalizeMoments(raw: Array<Record<string, unknown>>): ViralMoment[] {
+  return raw.map((m) => ({
+    rank: (m.rank as number) ?? 0,
+    title: (m.title as string) ?? "Moment viral",
+    viralScore: (m.viralScore as number) ?? 0,
+    hook: (m.hook as string) ?? "",
+    startTime: (m.startTime ?? m.start ?? 0) as number,
+    endTime: (m.endTime ?? m.end ?? (m.startTime ?? m.start ?? 0)) as number,
+    reasoning: (m.reasoning as string) ?? "",
+  }));
 }
 
 /* ----------------------------------------------------------------
@@ -86,7 +106,7 @@ function readVideoDuration(file: File): Promise<number | null> {
  * ---------------------------------------------------------------- */
 export function PipelinePage() {
   const [phase, setPhase] = useState<PipelinePhase>("idle");
-  const [statuses, setStatuses] = useState<StepStatus[]>(allPending);
+  const [statuses, setStatuses] = useState<StepStatus[]>(allPending());
   const [logs, setLogs] = useState<string[]>([]);
   const [clips, setClips] = useState<ViralMoment[]>([]);
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
@@ -96,19 +116,13 @@ export function PipelinePage() {
   // État de la modale de prévisualisation vidéo
   const [preview, setPreview] = useState<{ src: string; title: string } | null>(null);
 
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const clearTimers = useCallback(() => {
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current = [];
-  }, []);
-
-  useEffect(() => clearTimers, [clearTimers]);
+  // Dernier stage pollé (pour ne logger les transitions qu'une fois)
+  const lastStageRef = useRef<string | null>(null);
 
   const activeIndex = statuses.findIndex((s) => s === "active");
   const currentStep = activeIndex === -1 ? PIPELINE_STEPS.length : activeIndex;
 
   const reset = useCallback(() => {
-    clearTimers();
     setPhase("idle");
     setStatuses(allPending());
     setLogs([]);
@@ -117,7 +131,8 @@ export function PipelinePage() {
     setVideoDuration(undefined);
     setErrorMsg(undefined);
     setPreview(null);
-  }, [clearTimers]);
+    lastStageRef.current = null;
+  }, []);
 
   // Prévisualisation : ouvre la modale avec le flux vidéo segmenté
   const handlePreview = useCallback(
@@ -153,9 +168,55 @@ export function PipelinePage() {
     [projectId],
   );
 
+  // Polling de l'état du projet (déclenché après l'upload, tant que phase=processing)
+  useEffect(() => {
+    if (!projectId || phase !== "processing") return;
+
+    let active = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}`);
+        const data = await res.json().catch(() => ({}));
+        if (!active) return;
+
+        if (data.status === "COMPLETED") {
+          const moments = normalizeMoments((data.viralMoments as Array<Record<string, unknown>>) ?? []);
+          setStatuses(mapStatusToStepper("COMPLETED"));
+          setLogs((prev) => [
+            ...prev,
+            `✓ Pipeline terminé${moments.length ? ` — ${moments.length} moment(s) détecté(s)` : ""}`,
+          ]);
+          setClips(moments);
+          setPhase("done");
+          if (moments.length === 0) {
+            setErrorMsg("Transcription réussie, mais aucun moment viral n'a été détecté par l'IA.");
+          }
+        } else if (data.status === "FAILED") {
+          setStatuses(mapStatusToStepper("FAILED", data.stage));
+          setErrorMsg(data.error || "Échec du traitement");
+          setLogs((prev) => [...prev, `✗ ${data.error || "Erreur inconnue"}`]);
+          setPhase("error");
+        } else {
+          // PENDING ou PROCESSING : reflète l'avancement réel
+          setStatuses(mapStatusToStepper(data.status, data.stage));
+          if (data.stage && data.stage !== lastStageRef.current) {
+            lastStageRef.current = data.stage as string;
+            setLogs((prev) => [...prev, `> ${stageLog(data.stage)}`]);
+          }
+        }
+      } catch {
+        // erreur réseau temporaire : on réessaiera au prochain tick
+      }
+    }, 2000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [projectId, phase]);
+
   const handleFileSelect = useCallback(
     async (file: File) => {
-      clearTimers();
       setClips([]);
       setErrorMsg(undefined);
       setVideoDuration(undefined);
@@ -164,24 +225,15 @@ export function PipelinePage() {
       setPhase("processing");
 
       // Duration read client-side (no server change needed for the timeline)
-      readVideoDuration(file)
-        .then((d) => d != null && setVideoDuration(d))
-        .catch(() => {});
-
-      // Optimistic progression — lights up steps while waiting for the
-      // (synchronous) API; stopped as soon as the response returns.
-      for (let i = 1; i < PIPELINE_STEPS.length; i++) {
-        const t = setTimeout(() => {
-          setStatuses((prev) => {
-            const next = [...prev];
-            if (next[i - 1] !== "error") next[i - 1] = "completed";
-            next[i] = "active";
-            return next;
-          });
-          setLogs((prev) => [...prev, `> ${STEP_LOGS[i]}`]);
-        }, STEP_DELAY * i);
-        timersRef.current.push(t);
-      }
+      const url = URL.createObjectURL(file);
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        if (Number.isFinite(video.duration)) setVideoDuration(video.duration);
+      };
+      video.onerror = () => URL.revokeObjectURL(url);
+      video.src = url;
 
       try {
         const fd = new FormData();
@@ -190,60 +242,26 @@ export function PipelinePage() {
 
         const res = await fetch("/api/projects/upload", { method: "POST", body: fd });
         const data = await res.json().catch(() => ({}));
-        clearTimers();
 
-        // DEBUG : structure exacte renvoyée par le backend
-        console.log("Données reçues :", data);
-
-        // Normaliser les clips : l'API renvoie startTime/endTime, mais on tolère
-        // aussi start/end (au cas où le modèle IA utiliserait ces clés).
-        const rawMoments = (data.viralMoments ?? data.clips ?? []) as Array<Record<string, unknown>>;
-        const moments: ViralMoment[] = rawMoments.map((m) => {
-          const start = (m.startTime ?? m.start ?? 0) as number;
-          const end = (m.endTime ?? m.end ?? start) as number;
-          return {
-            rank: (m.rank as number) ?? 0,
-            title: (m.title as string) ?? "Moment viral",
-            viralScore: (m.viralScore as number) ?? 0,
-            hook: (m.hook as string) ?? "",
-            startTime: start,
-            endTime: end,
-            reasoning: (m.reasoning as string) ?? "",
-          };
-        });
-
-        // Succès si la requête est OK ET (flag success OU présence de clips).
-        // Ainsi, même si le backend renvoie un statut non-200 mais avec des
-        // moments, l'interface bascule quand même sur "done" (Succès).
-        const isSuccess = res.ok && (data.success === true || moments.length > 0);
-
-        if (!isSuccess) {
+        // L'upload renvoie 200 + projectId immédiatement (traitement async).
+        if (!res.ok || !data.success || !data.projectId) {
           throw new Error(
-            data?.message || (data?.errors && data.errors.join(" ; ")) || "Échec du traitement serveur",
+            data?.message || (data?.errors && data.errors.join(" ; ")) || "Échec de l'upload",
           );
         }
 
-        setStatuses(PIPELINE_STEPS.map(() => "completed"));
+        // Projet créé : on démarre le polling (géré par useEffect ci-dessus)
+        setProjectId(data.projectId as string);
+        setStatuses(mapStatusToStepper("PENDING"));
         setLogs((prev) => [
           ...prev,
-          `✓ Pipeline terminé${moments.length ? ` — ${moments.length} moment(s) détecté(s)` : ""}`,
+          `> Projet créé (${data.projectId}) — traitement en arrière-plan…`,
         ]);
-        setClips(moments);
-        setProjectId(data.projectId as string | undefined);
-        setPhase("done");
-
-        if (moments.length === 0) {
-          setErrorMsg(
-            "Transcription réussie, mais aucun moment viral n'a été détecté par l'IA.",
-          );
-        }
       } catch (err) {
-        clearTimers();
         const msg = err instanceof Error ? err.message : "Erreur inconnue";
         setErrorMsg(msg);
         setStatuses((prev) => {
           const next = [...prev];
-          // Marque en erreur la dernière étape active (ou la dernière étape)
           const idx = next.findIndex((s) => s === "active");
           next[idx === -1 ? next.length - 1 : idx] = "error";
           return next;
@@ -252,7 +270,7 @@ export function PipelinePage() {
         setPhase("error");
       }
     },
-    [clearTimers],
+    [],
   );
 
   return (

@@ -11,13 +11,21 @@ datasource db {
 }
 
 model Project {
-  id          String       @id @default(cuid())
-  name        String
-  description String?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  videoClips  VideoClip[]
-  transcripts Transcript[]
+  id           String       @id @default(cuid())
+  name         String
+  description  String?
+  // Statut du pipeline asynchrone : PENDING -> PROCESSING -> COMPLETED | FAILED
+  status       String       @default("PENDING")
+  // Étape en cours côté serveur (pour le stepper) : AUDIO | TRANSCRIPT | ANALYSIS
+  stage        String?
+  // Message d'erreur en cas de FAILED
+  error        String?
+  // Résultat de l'analyse DeepSeek (ViralMoment[]), stocké en JSON
+  viralMoments Json?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  videoClips   VideoClip[]
+  transcripts  Transcript[]
 
   @@map("projects")
 }
