@@ -11,6 +11,7 @@ import { PrismaClient } from '@/generated/prisma/client';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import Database from 'better-sqlite3';
 import { processProject } from '@/lib/pipeline';
+import { ClipDurationMode, normalizeClipDurationMode } from '@/lib/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,6 +39,7 @@ interface UrlImportResponse {
 
 interface UrlRequestBody {
   url?: unknown;
+  clipDurationMode?: unknown;
 }
 
 /**
@@ -48,7 +50,12 @@ interface UrlRequestBody {
  * Fonction fire-and-forget : toute erreur bascule le projet en FAILED sans
  * faire planter le serveur ([Fault Tolerance]).
  */
-async function downloadAndProcess(projectId: string, url: string, destPath: string): Promise<void> {
+async function downloadAndProcess(
+  projectId: string,
+  url: string,
+  destPath: string,
+  clipDurationMode: ClipDurationMode,
+): Promise<void> {
   try {
     // Stream YouTube → fichier disque (format combiné audio+vidéo, une seule passe)
     const videoStream = ytdl(url, { filter: 'audioandvideo', quality: 'highest' });
@@ -64,7 +71,7 @@ async function downloadAndProcess(projectId: string, url: string, destPath: stri
     }
 
     // Déclenche le pipeline existant, sans rien changer à sa logique
-    await processProject(projectId, destPath, fileSize, '');
+    await processProject(projectId, destPath, fileSize, '', clipDurationMode);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Erreur inconnue';
     console.error('[URL Import] Échec du téléchargement/traitement', projectId, ':', err);
@@ -87,6 +94,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<UrlImport
   try {
     const body = (await request.json().catch(() => ({}))) as UrlRequestBody;
     const url = typeof body.url === 'string' ? body.url.trim() : '';
+    const clipDurationMode = normalizeClipDurationMode(body.clipDurationMode);
 
     if (!url) {
       return NextResponse.json(
@@ -133,6 +141,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<UrlImport
         name: title,
         description: '',
         status: 'PENDING',
+        clipDurationMode,
       },
     });
 
@@ -150,7 +159,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<UrlImport
       { status: 200 },
     );
 
-    void downloadAndProcess(project.id, url, destPath).catch((e) =>
+    void downloadAndProcess(project.id, url, destPath, clipDurationMode).catch((e) =>
       console.error('[URL Import] downloadAndProcess non capturé:', e),
     );
 

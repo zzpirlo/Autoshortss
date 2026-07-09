@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { extractAudioToMp3, getVideoDuration, getVideoMetadata } from '@/lib/videoProcessor';
 import { transcribeAudioStream } from '@/lib/transcriptService';
 import { analyzeViralMoments } from '@/lib/aiAnalyzer';
+import { ClipDurationMode, normalizeClipDurationMode } from '@/lib/types';
 import { PrismaClient, Prisma } from '@/generated/prisma/client';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import Database from 'better-sqlite3';
@@ -49,6 +50,7 @@ export async function processProject(
   sourcePath: string,
   fileSize: number,
   projectDescription: string,
+  clipDurationMode: ClipDurationMode = 'standard',
 ): Promise<void> {
   try {
     await prisma.project.update({
@@ -106,6 +108,7 @@ export async function processProject(
         confidence: s.confidence,
       })),
       DEEPSEEK_API_KEY!,
+      clipDurationMode,
     );
 
     const description =
@@ -181,7 +184,10 @@ export async function recoverOrphanProjects(): Promise<void> {
     );
 
     const description = stripMoments(p.description);
-    void processProject(p.id, clip.filePath, clip.fileSize ?? 0, description).catch((e) =>
+    const mode = normalizeClipDurationMode(
+      (p as unknown as { clipDurationMode?: string }).clipDurationMode,
+    );
+    void processProject(p.id, clip.filePath, clip.fileSize ?? 0, description, mode).catch((e) =>
       console.error(`[Init] Échec de la reprise du projet ${p.id}:`, e),
     );
   }

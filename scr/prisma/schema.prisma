@@ -18,6 +18,8 @@ model Project {
   status       String       @default("PENDING")
   // Étape en cours côté serveur (pour le stepper) : AUDIO | TRANSCRIPT | ANALYSIS
   stage        String?
+  // Mode stratégique de découpe choisi par l'utilisateur : punchy | standard | deep
+  clipDurationMode String   @default("standard")
   // Message d'erreur en cas de FAILED
   error        String?
   // Résultat de l'analyse DeepSeek (ViralMoment[]), stocké en JSON

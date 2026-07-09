@@ -1,4 +1,9 @@
-import { DeepSeekResponse, ViralMoment } from './types';
+import {
+  ClipDurationMode,
+  DEFAULT_CLIP_DURATION_MODE,
+  DeepSeekResponse,
+  ViralMoment,
+} from './types';
 
 /**
  * Service d'analyse IA via DeepSeek
@@ -21,24 +26,56 @@ interface DeepSeekRequest {
 }
 
 /**
+ * Instructions de découpe injectées dynamiquement dans le prompt système
+ * selon le mode stratégique choisi par l'utilisateur.
+ */
+function buildDurationDirective(mode: ClipDurationMode): string {
+  switch (mode) {
+    case 'punchy':
+      return `MODE DE DÉCOUPE : PUNCHY (15-30 secondes)
+- Isole UNIQUEMENT des punchlines ou des hooks fulgurants.
+- Chaque moment DOIT durer entre 15 et 30 secondes (endTime - startTime).
+- Privilégie l'impact immédiat, la phrase choc, le rythme percutant.
+- Élimine tout contexte superflu : va droit au moment le plus explosif.`;
+    case 'deep':
+      return `MODE DE DÉCOUPE : DEEP CONTENT (60-90 secondes ou plus) [Monétisation TikTok]
+- Exige explicitement des segments de 60 à 90 secondes minimum (endTime - startTime >= 60).
+- Centre chaque moment sur une explication COMPLÈTE, un développement argumenté ou une démonstration.
+- Optimise pour la rétention longue et l'éligibilité à la monétisation TikTok (contenu > 1 min).
+- Conserve le contexte narratif nécessaire à la compréhension autonome du clip.`;
+    case 'standard':
+    default:
+      return `MODE DE DÉCOUPE : STANDARD (30-60 secondes)
+- Chaque moment DOIT durer entre 30 et 60 secondes (endTime - startTime).
+- Équilibre entre hook percutant et développement suffisant.`;
+  }
+}
+
+/**
  * Analyse une transcription pour trouver les 3 moments les plus viraux
  * @param transcript - Texte complet de la transcription
  * @param segments - Segments minutés
  * @param apiKey - Clé API DeepSeek
+ * @param clipDurationMode - Stratégie de découpe (punchy | standard | deep)
  * @returns Liste des 3 moments viraux avec scores et timestamps
  */
 export async function analyzeViralMoments(
   transcript: string,
   segments: { start: number; end: number; text: string; confidence: number }[],
-  apiKey: string
+  apiKey: string,
+  clipDurationMode: ClipDurationMode = DEFAULT_CLIP_DURATION_MODE
 ): Promise<ViralMoment[]> {
   // Construire le contexte avec timestamps
   const timedTranscript = segments
     .map((s, i) => `[${i}] ${formatTime(s.start)}-${formatTime(s.end)}: ${s.text}`)
     .join('\n');
 
+  const durationDirective = buildDurationDirective(clipDurationMode);
+
   const systemPrompt = `Tu es un expert en viralité de contenu vidéo court (TikTok, Reels, Shorts).
 Ta tâche : analyser une transcription minutée et identifier les 3 moments les plus viraux.
+
+${durationDirective}
 
 CRITÈRES DE VIRALITÉ :
 1. Hook fort dans les 3 premières secondes (curiosité, choc, émotion, promesse)
@@ -68,6 +105,7 @@ RÈGLES :
 - viralScore entre 0-100
 - hook = les premiers mots prononcés dans le segment
 - Ne PAS inventer de timestamps, utiliser ceux fournis
+- Respecter IMPÉRATIVEMENT la durée imposée par le MODE DE DÉCOUPE ci-dessus
 - Exactement 3 moments, classés par score décroissant`;
 
   const userPrompt = `TRANSCRIPTION MINUTÉE :

@@ -13,6 +13,7 @@ import { PrismaClient } from '@/generated/prisma/client';
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import Database from 'better-sqlite3';
 import { processProject } from '@/lib/pipeline';
+import { normalizeClipDurationMode } from '@/lib/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,6 +127,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
     const file = formData.get('video') as File | null;
     const projectName = formData.get('projectName') as string | null;
     const projectDescription = (formData.get('projectDescription') as string | null) || '';
+    const clipDurationMode = normalizeClipDurationMode(formData.get('clipDurationMode'));
 
     if (!file) {
       return NextResponse.json(
@@ -155,6 +157,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
         name: projectName || file.name.replace(/\.[^/.]+$/, ''),
         description: projectDescription,
         status: 'PENDING',
+        clipDurationMode,
       },
     });
 
@@ -181,7 +184,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<UploadRes
     );
 
     // Déclenchement asynchrone (non bloquant).
-    void processProject(project.id, persistedPath, file.size, projectDescription).catch((e) =>
+    void processProject(project.id, persistedPath, file.size, projectDescription, clipDurationMode).catch((e) =>
       console.error('[Upload] processProject non capturé:', e),
     );
 

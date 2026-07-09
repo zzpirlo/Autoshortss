@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { ClipCard } from "@/components/ui/ClipCard";
 import type { StepStatus } from "@/components/StagePanel";
-import { ViralMoment } from "@/lib/types";
+import { ClipDurationMode, ViralMoment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /* ----------------------------------------------------------------
@@ -139,6 +139,106 @@ function normalizeMoments(raw: unknown): ViralMoment[] {
 }
 
 /* ----------------------------------------------------------------
+ * Sélecteur stratégique de durée des clips (atomic, Dark/Tech)
+ * ---------------------------------------------------------------- */
+interface ClipDurationOption {
+  value: ClipDurationMode;
+  label: string;
+  range: string;
+  hint?: string;
+}
+
+const CLIP_DURATION_OPTIONS: ClipDurationOption[] = [
+  { value: "punchy", label: "Punchy", range: "15-30s", hint: "Hooks fulgurants" },
+  { value: "standard", label: "Standard", range: "30-60s", hint: "Équilibré" },
+  {
+    value: "deep",
+    label: "Deep Content",
+    range: "60-90s+",
+    hint: "Monétisation TikTok",
+  },
+];
+
+interface ClipDurationSelectorProps {
+  value: ClipDurationMode;
+  onChange: (mode: ClipDurationMode) => void;
+  disabled?: boolean;
+}
+
+/**
+ * Sélecteur horizontal exclusif (radiogroup) — onglets rétroéclairés néon.
+ * Composant pur : ne gère aucun état, tout remonte via onChange.
+ */
+function ClipDurationSelector({ value, onChange, disabled }: ClipDurationSelectorProps) {
+  return (
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="mb-3 flex items-center justify-center gap-2">
+        <span className="font-mono text-xs uppercase tracking-[0.2em] text-cyan-400">
+          Stratégie de découpe
+        </span>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label="Durée stratégique des clips"
+        className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+      >
+        {CLIP_DURATION_OPTIONS.map((opt) => {
+          const selected = value === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={disabled}
+              onClick={() => onChange(opt.value)}
+              className={cn(
+                "group relative flex flex-col items-center gap-1 rounded-xl border-2 px-4 py-3",
+                "text-center transition-all duration-200 focus:outline-none",
+                "disabled:cursor-not-allowed disabled:opacity-50",
+                selected
+                  ? "border-cyan-400 bg-cyan-500/10 shadow-[0_0_25px_rgba(6,182,212,0.25)] ring-2 ring-cyan-500/30"
+                  : "border-zinc-700 bg-zinc-950/60 hover:border-cyan-500/50 hover:bg-zinc-900",
+              )}
+            >
+              {selected && (
+                <span className="absolute right-2 top-2 h-2 w-2 animate-pulse rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.8)]" />
+              )}
+              <span
+                className={cn(
+                  "text-sm font-semibold tracking-tight",
+                  selected ? "text-cyan-100" : "text-zinc-200",
+                )}
+              >
+                {opt.label}
+              </span>
+              <span
+                className={cn(
+                  "font-mono text-xs",
+                  selected ? "text-cyan-300" : "text-zinc-500",
+                )}
+              >
+                {opt.range}
+              </span>
+              {opt.hint && (
+                <span
+                  className={cn(
+                    "text-[10px] uppercase tracking-wider",
+                    selected ? "text-cyan-400/80" : "text-zinc-600",
+                  )}
+                >
+                  {opt.hint}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------
  * PipelinePage — Wizard exclusif à 3 phases
  * ---------------------------------------------------------------- */
 export function PipelinePage() {
@@ -157,6 +257,9 @@ export function PipelinePage() {
   const [urlValue, setUrlValue] = useState<string>("");
   const [urlSubmitting, setUrlSubmitting] = useState<boolean>(false);
 
+  // Stratégie de découpe des clips (transmise à l'IA)
+  const [clipDurationMode, setClipDurationMode] = useState<ClipDurationMode>("standard");
+
   const activeIndex = statuses.findIndex((s) => s === "active");
   const currentStep = activeIndex === -1 ? PIPELINE_STEPS.length : activeIndex;
 
@@ -171,6 +274,7 @@ export function PipelinePage() {
     setPreview(null);
     setUrlValue("");
     setUrlSubmitting(false);
+    setClipDurationMode("standard");
   }, []);
 
   // Prévisualisation : ouvre la modale avec le flux vidéo fragmenté
@@ -276,6 +380,7 @@ export function PipelinePage() {
       const fd = new FormData();
       fd.append("video", file);
       fd.append("projectName", file.name.replace(/\.[^/.]+$/, ""));
+      fd.append("clipDurationMode", clipDurationMode);
 
       const res = await fetch("/api/projects/upload", { method: "POST", body: fd });
       const data: { success?: boolean; projectId?: string; message?: string; errors?: string[] } =
@@ -303,7 +408,7 @@ export function PipelinePage() {
       });
       setScreen("error");
     }
-  }, []);
+  }, [clipDurationMode]);
 
   // Import par URL (YouTube) : POST vers la nouvelle API, puis bascule en Phase 2.
   const handleUrlSubmit = useCallback(async () => {
@@ -323,7 +428,7 @@ export function PipelinePage() {
       const res = await fetch("/api/projects/url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, clipDurationMode }),
       });
       const data: { success?: boolean; projectId?: string; message?: string; errors?: string[] } =
         await res.json().catch(() => ({}));
@@ -352,7 +457,7 @@ export function PipelinePage() {
     } finally {
       setUrlSubmitting(false);
     }
-  }, [urlValue, urlSubmitting]);
+  }, [urlValue, urlSubmitting, clipDurationMode]);
 
   return (
     <main className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col px-6 py-12">
@@ -377,8 +482,15 @@ export function PipelinePage() {
       {screen === "upload" && (
         <section
           key="phase-upload"
-          className="flex flex-1 animate-fade-in items-center justify-center"
+          className="flex flex-1 animate-fade-in flex-col items-center justify-center gap-10"
         >
+          {/* Sélecteur stratégique de durée des clips (avant DropZone & URL) */}
+          <ClipDurationSelector
+            value={clipDurationMode}
+            onChange={setClipDurationMode}
+            disabled={urlSubmitting}
+          />
+
           <div className="grid w-full max-w-5xl grid-cols-1 items-stretch gap-6 lg:grid-cols-[1fr_auto_1fr]">
             {/* --- Gauche : DropZone (upload fichier) --- */}
             <div className="w-full">
