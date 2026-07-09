@@ -153,6 +153,10 @@ export function PipelinePage() {
   // État de la modale de prévisualisation vidéo
   const [preview, setPreview] = useState<{ src: string; title: string } | null>(null);
 
+  // Import Premium par URL (YouTube)
+  const [urlValue, setUrlValue] = useState<string>("");
+  const [urlSubmitting, setUrlSubmitting] = useState<boolean>(false);
+
   const activeIndex = statuses.findIndex((s) => s === "active");
   const currentStep = activeIndex === -1 ? PIPELINE_STEPS.length : activeIndex;
 
@@ -165,6 +169,8 @@ export function PipelinePage() {
     setErrorMsg(undefined);
     setStatusLabel("Initialisation du pipeline…");
     setPreview(null);
+    setUrlValue("");
+    setUrlSubmitting(false);
   }, []);
 
   // Prévisualisation : ouvre la modale avec le flux vidéo fragmenté
@@ -299,6 +305,55 @@ export function PipelinePage() {
     }
   }, []);
 
+  // Import par URL (YouTube) : POST vers la nouvelle API, puis bascule en Phase 2.
+  const handleUrlSubmit = useCallback(async () => {
+    const url = urlValue.trim();
+    if (!url || urlSubmitting) return;
+
+    setUrlSubmitting(true);
+    setClips([]);
+    setErrorMsg(undefined);
+    setVideoDuration(undefined);
+    setStatusLabel("Récupération de la vidéo YouTube…");
+    setStatuses(PIPELINE_STEPS.map((_, i) => (i === 0 ? "active" : "pending")));
+    // PHASE 2 : on quitte immédiatement l'écran d'upload pour le stepper
+    setScreen("pipeline");
+
+    try {
+      const res = await fetch("/api/projects/url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data: { success?: boolean; projectId?: string; message?: string; errors?: string[] } =
+        await res.json().catch(() => ({}));
+
+      // L'API renvoie 200 + projectId immédiatement (traitement asynchrone).
+      if (!res.ok || !data.success || !data.projectId) {
+        throw new Error(
+          data?.message || (data?.errors && data.errors.join(" ; ")) || "Échec de l'import URL",
+        );
+      }
+
+      // Projet créé : on démarre le polling (géré par useEffect ci-dessus)
+      setProjectId(data.projectId);
+      setStatuses(mapStatusToStepper("PENDING"));
+      setStatusLabel("Projet créé — téléchargement en arrière-plan…");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erreur inconnue";
+      setErrorMsg(msg);
+      setStatuses((prev) => {
+        const next = [...prev];
+        const idx = next.findIndex((s) => s === "active");
+        next[idx === -1 ? next.length - 1 : idx] = "error";
+        return next;
+      });
+      setScreen("error");
+    } finally {
+      setUrlSubmitting(false);
+    }
+  }, [urlValue, urlSubmitting]);
+
   return (
     <main className="mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col px-6 py-12">
       {/* Hero — cadre persistant de l'application */}
@@ -318,14 +373,93 @@ export function PipelinePage() {
         </p>
       </header>
 
-      {/* ================= PHASE 1 — UPLOAD ================= */}
+      {/* ================= PHASE 1 — UPLOAD / URL ================= */}
       {screen === "upload" && (
         <section
           key="phase-upload"
           className="flex flex-1 animate-fade-in items-center justify-center"
         >
-          <div className="w-full max-w-2xl">
-            <DropZone onFileSelect={handleFileSelect} />
+          <div className="grid w-full max-w-5xl grid-cols-1 items-stretch gap-6 lg:grid-cols-[1fr_auto_1fr]">
+            {/* --- Gauche : DropZone (upload fichier) --- */}
+            <div className="w-full">
+              <DropZone onFileSelect={handleFileSelect} />
+            </div>
+
+            {/* --- Milieu : séparateur "OU" --- */}
+            <div className="flex items-center justify-center lg:flex-col">
+              <span className="hidden w-px flex-1 bg-gradient-to-b from-transparent via-zinc-700 to-transparent lg:block" />
+              <span className="mx-4 my-3 flex h-10 w-10 items-center justify-center rounded-full border border-cyan-500/40 bg-zinc-900 font-mono text-xs font-semibold uppercase tracking-widest text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]">
+                OU
+              </span>
+              <span className="hidden w-px flex-1 bg-gradient-to-b from-transparent via-zinc-700 to-transparent lg:block" />
+            </div>
+
+            {/* --- Droite : import par URL YouTube (Premium) --- */}
+            <div className="w-full">
+              <Card variant="outlined" padding="lg" className="flex h-full flex-col justify-center">
+                <div className="flex flex-col items-center gap-6 text-center">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="viral" size="sm">
+                      Premium
+                    </Badge>
+                    <span className="font-mono text-xs uppercase tracking-[0.2em] text-zinc-500">
+                      Import par URL
+                    </span>
+                  </div>
+
+                  <div className="relative animate-float text-cyan-400">
+                    <svg className="h-16 w-16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+                    </svg>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h3 className="text-2xl font-semibold tracking-tight text-white">
+                      Collez un lien YouTube
+                    </h3>
+                    <p className="max-w-md text-zinc-400">
+                      La vidéo est importée puis analysée automatiquement
+                      <span className="ml-1 text-zinc-500">(max 20 min)</span>
+                    </p>
+                  </div>
+
+                  <div className="flex w-full max-w-md flex-col gap-3">
+                    <input
+                      type="url"
+                      inputMode="url"
+                      value={urlValue}
+                      onChange={(e) => setUrlValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handleUrlSubmit();
+                        }
+                      }}
+                      placeholder="https://www.youtube.com/watch?v=…"
+                      disabled={urlSubmitting}
+                      aria-label="URL de la vidéo YouTube"
+                      className={cn(
+                        "w-full rounded-xl border-2 border-cyan-500/40 bg-zinc-950/60 px-4 py-3",
+                        "font-mono text-sm text-cyan-100 placeholder:text-zinc-600",
+                        "transition-all duration-200 focus:border-cyan-400 focus:outline-none",
+                        "focus:shadow-[0_0_25px_rgba(6,182,212,0.2)] focus:ring-2 focus:ring-cyan-500/30",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                      )}
+                    />
+                    <Button
+                      variant="neon"
+                      size="lg"
+                      fullWidth
+                      isLoading={urlSubmitting}
+                      disabled={!urlValue.trim()}
+                      onClick={() => void handleUrlSubmit()}
+                    >
+                      Traiter l&apos;URL
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
           </div>
         </section>
       )}

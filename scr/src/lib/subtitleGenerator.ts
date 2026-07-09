@@ -6,6 +6,10 @@
  * précis de chaque mot fournis par Deepgram.
  */
 
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+
 export interface TimedWord {
   text: string;
   start: number; // secondes
@@ -44,7 +48,9 @@ const DEFAULTS = {
   outline: 5,
   alignment: 2,
   marginV: 260,
-  maxWordsPerCue: 7,
+  // Style "CapCut" : 1 à 3 mots max par séquence pour un défilement très rapide
+  // synchronisé sur la parole.
+  maxWordsPerCue: 3,
   karaoke: true,
 };
 

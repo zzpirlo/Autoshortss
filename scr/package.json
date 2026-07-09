@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@deepgram/sdk": "^5.5.0",
+    "@distube/ytdl-core": "^4.16.12",
     "@prisma/adapter-better-sqlite3": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "better-sqlite3": "^12.11.1",
