@@ -231,7 +231,11 @@ export async function exportVerticalShort(
   const cropFilter = 'crop=ih*9/16:ih';
   let vf = `${cropFilter},scale=1080:1920,setsar=1`;
   if (assPath) {
-    vf += `,subtitles=${escapeSubtitlesPath(assPath)}`;
+    // On pointe explicitement FFmpeg/libass sur la police embarquée (Anton) via
+    // `fontsdir` : le rendu "CapCut" est ainsi identique partout, sans dépendre
+    // des polices système du Codespace.
+    const fontsDir = join(projectRoot, 'assets', 'fonts');
+    vf += `,subtitles=filename=${escapeSubtitlesPath(assPath)}:fontsdir=${escapeSubtitlesPath(fontsDir)}`;
   }
 
   const ffmpeg = spawn('ffmpeg', [

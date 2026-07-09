@@ -40,7 +40,9 @@ export interface SubtitleStyleOptions {
 }
 
 const DEFAULTS = {
-  fontName: 'Arial Black',
+  // Police embarquée dans le repo (assets/fonts/Anton-Regular.ttf) : condensée et
+  // très grasse, rendu "CapCut/Impact" garanti quel que soit l'environnement.
+  fontName: 'Anton',
   fontSize: 100,
   primaryColour: '&H0000FFFF', // jaune opaque (R=FF, G=FF, B=00)
   secondaryColour: '&H00FFFFFF', // blanc opaque
