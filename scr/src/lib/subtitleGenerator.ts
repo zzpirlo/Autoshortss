@@ -146,7 +146,9 @@ export function generateAssSubtitles(
   lines.push('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text');
 
   if (words.length) {
-    const cues = buildCues(words, o.maxWordsPerCue);
+    // Contrainte CapCut stricte : jamais plus de 3 mots par séquence
+    const maxPerCue = Math.min(3, Math.max(1, Math.round(o.maxWordsPerCue)));
+    const cues = buildCues(words, maxPerCue);
     for (const cue of cues) {
       const start = formatAssTime(cue[0].start);
       const end = formatAssTime(cue[cue.length - 1].end);
@@ -156,4 +158,40 @@ export function generateAssSubtitles(
   }
 
   return lines.join('\r\n') + '\r\n';
+}
+
+/**
+ * Génère un fichier `.ass` temporaire de sous-titres "CapCut" dans un dossier
+ * donné (ex: `data/uploads/`) et renvoie son chemin absolu.
+ *
+ * Les timestamps des mots sont **rebasés** sur `timeOffset` (en secondes) : lors
+ * d'un découpage FFmpeg avec `-ss` en amont de `-i`, la timeline de sortie
+ * redémarre à 0. Sans ce rebasage, les sous-titres (calés sur le temps absolu de
+ * la vidéo source) ne s'afficheraient jamais sur le clip.
+ *
+ * @param words - Mots minutés (temps absolus de la vidéo source)
+ * @param dir - Dossier de destination du fichier `.ass` (créé si absent)
+ * @param timeOffset - Décalage (s) à soustraire à chaque timestamp (= début du clip)
+ * @param opts - Options de style
+ * @returns Chemin absolu du fichier `.ass` généré
+ */
+export async function writeSubtitleFile(
+  words: TimedWord[],
+  dir: string,
+  timeOffset = 0,
+  opts: SubtitleStyleOptions = {},
+): Promise<string> {
+  const rebased: TimedWord[] = words.map((w) => ({
+    text: w.text,
+    start: Math.max(0, w.start - timeOffset),
+    end: Math.max(0, w.end - timeOffset),
+  }));
+
+  const content = generateAssSubtitles(rebased, opts);
+
+  await mkdir(dir, { recursive: true });
+  const filePath = join(dir, `subtitles-${randomUUID()}.ass`);
+  await writeFile(filePath, content, 'utf8');
+
+  return filePath;
 }

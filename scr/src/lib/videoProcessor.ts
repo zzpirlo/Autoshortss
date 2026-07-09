@@ -3,12 +3,19 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
-import { generateAssSubtitles, type TimedWord } from '@/lib/subtitleGenerator';
+import { writeSubtitleFile, type TimedWord } from '@/lib/subtitleGenerator';
 
 const execFileAsync = promisify(execFile);
+
+// Racine du projet (src/lib -> scr) pour localiser data/uploads/
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.join(__dirname, '../..');
 
 /**
  * Extrait l'audio d'une vidéo en MP3 via FFmpeg.
@@ -175,7 +182,7 @@ export async function exportVerticalShort(
     throw new Error(`Intervalle de segment invalide : start=${start}, end=${end} (attendu start >= 0 et end > start)`);
   }
 
-  const { access, mkdir, stat, unlink, writeFile } = await import('node:fs/promises');
+  const { access, mkdir, stat, unlink } = await import('node:fs/promises');
 
   // Tolérance aux pannes : vérifier la source AVANT de lancer FFmpeg
   await access(videoPath);
@@ -192,11 +199,6 @@ export async function exportVerticalShort(
   if (wordsInRange.length > 0) {
     clipStart = Math.max(start, wordsInRange[0].start);
     clipEnd = Math.min(end, wordsInRange[wordsInRange.length - 1].end);
-
-    // Générer le fichier .ass des sous-titres et le graver via le filtre FFmpeg
-    const assContent = generateAssSubtitles(wordsInRange, { karaoke: true });
-    assPath = join(tmpdir(), `${randomUUID()}.ass`);
-    await writeFile(assPath, assContent, 'utf8');
   }
 
   // Repli si le cut dérivé des mots est trop court
@@ -206,6 +208,24 @@ export async function exportVerticalShort(
   }
 
   const duration = clipEnd - clipStart;
+
+  // Générer le fichier .ass des sous-titres "CapCut" (temporaire dans data/uploads/).
+  // Les timestamps sont rebasés sur `clipStart` car `-ss` avant `-i` remet la
+  // timeline de sortie à 0 (sinon les sous-titres ne s'afficheraient jamais).
+  if (wordsInRange.length > 0) {
+    try {
+      assPath = await writeSubtitleFile(
+        wordsInRange,
+        join(projectRoot, 'data', 'uploads'),
+        clipStart,
+        { karaoke: true },
+      );
+    } catch (subErr) {
+      // Sous-titres non critiques : on exporte le clip même si la génération échoue
+      console.error('[Export] Génération des sous-titres échouée, export sans sous-titres:', subErr);
+      assPath = undefined;
+    }
+  }
 
   // Recadrage vertical centré : bande de largeur ih*9/16 au centre
   const cropFilter = 'crop=ih*9/16:ih';
